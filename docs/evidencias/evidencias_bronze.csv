@@ -1,0 +1,8 @@
+tabela,status,linhas_origem,linhas_baixadas,linhas_antes,linhas_depois,linhas_acrescentadas,checagem,job_id,duracao_s
+uf,OK,145,145,145,290,145,True,c34672d9-1a73-41df-acc0-32c39dcd09f4,0.9
+municipio,OK,23995,23995,23995,47990,23995,True,3c3e355f-4d7f-4a60-be2e-c27c1727a974,2.4
+meta_alfabetizacao_brasil,OK,3,3,3,6,3,True,13baf1d2-3d01-4e8f-90f7-bc585f900290,1.9
+meta_alfabetizacao_uf,OK,81,81,81,162,81,True,3845be94-180f-48b7-b020-81dcdc0e8b17,1.1
+meta_alfabetizacao_municipio,OK,10704,10704,10704,21408,10704,True,866f1316-abc3-461f-ad71-df07735bc5ed,1.1
+dicionario,OK,27,27,27,54,27,True,b465f7b7-aa9e-425d-9e88-f3337cccf9a9,0.9
+alunos,OK,3867999,3867999,3867999,7735998,3867999,True,e44f33a4-bf01-41b7-9319-4545600a6a49,9.2
