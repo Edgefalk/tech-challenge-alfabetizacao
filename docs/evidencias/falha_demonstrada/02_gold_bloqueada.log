@@ -1,0 +1,4 @@
+﻿Conectado ao projeto: project-ce782257-1c9c-4b6f-87a
+== Portão: última validação da Silver ==
+ERRO: a última execução da Silver não foi aprovada (ou não existe). Gold não publicada.
+Rode 'python silver/silver_transformacao.py' e corrija as regras reprovadas.
