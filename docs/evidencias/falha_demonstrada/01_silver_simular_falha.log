@@ -1,0 +1,61 @@
+﻿Conectado ao projeto: project-ce782257-1c9c-4b6f-87a
+Execução: silver_20261021_160213_34ac17 
+
+== Silver: transformações ==
+   01_de_para.sql: ok | job 89270715-1851-4cd9-a8e7-4d245b0a70bc | 0.000 GB processados | 2.7 s
+   02_municipio.sql: ok | job ef238057-6e03-4892-b8eb-d118e89f0faa | 0.007 GB processados | 1.9 s
+   03_meta_municipio.sql: ok | job 9732a128-a05e-48de-86f4-b962ec37d28f | 0.004 GB processados | 1.6 s
+   04_uf.sql: ok | job bb889f2c-5148-4c54-81d5-82f37cdd701b | 0.000 GB processados | 1.7 s
+   05_meta_uf.sql: ok | job d127714f-be7d-46b3-bb3f-1870edbf319f | 0.000 GB processados | 1.7 s
+   06_meta_brasil.sql: ok | job 40c62de0-cbfa-442c-943c-a91e98e01446 | 0.000 GB processados | 1.3 s
+   07_alunos.sql: ok | job abf0ef36-7cb3-4ffb-abed-667e2942cee5 | 1.009 GB processados | 9.1 s
+
+== Silver: regras de qualidade ==
+   (simulação de falha: limiar da R04 elevado para 99,9%)
+   [       ok] R07 bloqueante  alunos                       valor=100.0
+   [       ok] R07 bloqueante  municipio                    valor=100.0
+   [       ok] R07 bloqueante  uf                           valor=100.0
+   [       ok] R07 bloqueante  meta_alfabetizacao_municipio valor=100.0
+   [       ok] R07 bloqueante  meta_alfabetizacao_uf        valor=100.0
+   [       ok] R07 bloqueante  meta_alfabetizacao_brasil    valor=100.0
+   [       ok] R07 bloqueante  dicionario                   valor=100.0
+   [       ok] R01 bloqueante  municipio                    valor=0.0
+   [       ok] R02 bloqueante  municipio                    valor=0.0
+   [       ok] R03 bloqueante  municipio                    valor=0.0
+   [       ok] R01 bloqueante  uf                           valor=0.0
+   [       ok] R02 bloqueante  uf                           valor=0.0
+   [       ok] R03 bloqueante  uf                           valor=0.0
+   [       ok] R01 bloqueante  meta_municipio               valor=0.0
+   [       ok] R02 bloqueante  meta_municipio               valor=0.0
+   [       ok] R03 bloqueante  meta_municipio               valor=0.0
+   [       ok] R01 bloqueante  meta_uf                      valor=0.0
+   [       ok] R02 bloqueante  meta_uf                      valor=0.0
+   [       ok] R03 bloqueante  meta_uf                      valor=0.0
+   [       ok] R01 bloqueante  meta_brasil                  valor=0.0
+   [       ok] R02 bloqueante  meta_brasil                  valor=0.0
+   [       ok] R03 bloqueante  meta_brasil                  valor=0.0
+   [       ok] R01 bloqueante  alunos                       valor=0.0
+   [       ok] R02 bloqueante  alunos                       valor=0.0
+   [       ok] R03 bloqueante  alunos                       valor=0.0
+   [REPROVADA] R04 bloqueante  municipio x meta_municipio   valor=97.32011747430249
+   [       ok] R12 bloqueante  uf x meta_uf                 valor=100.0
+   [       ok] R05 bloqueante  municipio                    valor=0.0
+   [       ok] R05 bloqueante  uf                           valor=0.0
+   [       ok] R05 bloqueante  meta_municipio               valor=0.0
+   [       ok] R05 bloqueante  meta_uf                      valor=0.0
+   [       ok] R05 bloqueante  meta_brasil                  valor=0.0
+   [       ok] R05 bloqueante  alunos                       valor=0.0
+   [       ok] R06 bloqueante  alunos                       valor=0.0
+   [       ok] R08 informativa municipio                    valor=0.0
+   [       ok] R08 informativa uf                           valor=0.0
+   [REPROVADA] R09 informativa meta_municipio x municipio   valor=62.54724111866969
+   [REPROVADA] R10 informativa alunos                       valor=18.0
+   [REPROVADA] R11 informativa uf                           valor=25.0
+
+== Gravação dos resultados ==
+   00_dq_results.sql: ok | job e70492d0-3a7f-4db1-98bc-d575a65f8077 | 0.000 GB processados | 0.7 s
+   39 resultados gravados em project-ce782257-1c9c-4b6f-87a.ops_tc.dq_results (job b0c46aaa-dcfa-4c10-a4d7-03055d5b3d3e)
+   cópia local: docs\evidencias\dq_silver_20261021_160213_34ac17.csv
+
+ERRO: 1 regra(s) bloqueante(s) reprovada(s): R04 municipio x meta_municipio (valor 97.32011747430249, limiar >= 99.9)
+A Gold não deve ser publicada sobre esta Silver.

@@ -1,0 +1,10 @@
+execucao_id,executado_em,camada,tabela,regra_id,descricao,severidade,valor_medido,limiar,status
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,municipio_meta,G01,Status de meta calculado só com taxa e meta preenchidas,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,municipio_meta,G02,Status de meta preenchido com um dos 3 estados,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,uf_meta,G01,Status de meta calculado só com taxa e meta preenchidas,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,uf_meta,G02,Status de meta preenchido com um dos 3 estados,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,brasil_meta,G01,Status de meta calculado só com taxa e meta preenchidas,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,brasil_meta,G02,Status de meta preenchido com um dos 3 estados,bloqueante,0.0,== 0,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,municipio_meta,R13,Municípios em 'sem_meta' em 2024 (rede municipal),informativa,216.0,,medida
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,validacao_cruzada,V01,Validação cruzada Brasil 2024: |taxa recalculada - oficial| em p.p.,informativa,0.0,<= 0.5,aprovada
+gold_20261021_160141_03d23c,2026-10-21T16:01:53.036941+00:00,gold,validacao_cruzada,V02,"Validação cruzada municípios 2024 (rede 3): % a até 0,5 p.p. da taxa oficial",informativa,99.50440528634361,>= 95,aprovada
