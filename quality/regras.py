@@ -51,8 +51,51 @@ TABELAS_BRONZE = [
 ]
 
 
-def regras_silver(limiar_match_municipio: float = 95.0) -> list:
+def regras_eventos_silver() -> list:
+    """Regras da silver.alunos_eventos (streaming). Só entram quando a Silver de eventos existe."""
+    t = "alunos_eventos"
+    tab = "`{projeto}.{silver}.alunos_eventos`"
+    return [
+        # E01 · deduplicação: um id_evento por linha (prova que o duplicado enviado de propósito não chegou à Silver)
+        Regra("E01", "Chave única: um id_evento por linha (deduplicação)", "bloqueante", "silver", t,
+              f"SELECT COUNT(*) - COUNT(DISTINCT id_evento) AS valor FROM {tab}", "==", 0),
+        # E02 · nulo em campo obrigatório do evento
+        Regra("E02", "Sem nulo em id_evento, origem, id_municipio, id_aluno, ano e horários", "bloqueante", "silver", t,
+              f"""SELECT COUNTIF(id_evento IS NULL OR origem IS NULL OR id_municipio IS NULL OR id_aluno IS NULL
+                  OR ano IS NULL OR horario_producao IS NULL OR horario_recebimento IS NULL) AS valor FROM {tab}""",
+              "==", 0),
+        # E03 · origem: todo evento declara que é simulado (nunca se passa por dado oficial)
+        Regra("E03", "Toda linha tem origem = 'simulado'", "bloqueante", "silver", t,
+              f"SELECT COUNTIF(origem IS NULL OR origem <> 'simulado') AS valor FROM {tab}", "==", 0),
+        # E04 · latência de verdade: carimbo igual nos dois campos daria latência 0 e a medida não mediria nada
+        Regra("E04", "Latência medida e maior que zero (recebimento > produção)", "bloqueante", "silver", t,
+              f"SELECT COUNTIF(latencia_segundos IS NULL OR latencia_segundos <= 0) AS valor FROM {tab}", "==", 0),
+        # E05 · consistência: alfabetizado precisa bater com o corte de 743 pontos
+        Regra("E05", "alfabetizado coerente com a proficiência (corte de 743)", "bloqueante", "silver", t,
+              f"""SELECT COUNTIF(avaliado AND alfabetizado <> IF(proficiencia >= 743, '1', '0')) AS valor FROM {tab}""",
+              "==", 0),
+        # E06 · faixas
+        Regra("E06", "Proficiência (0 a 1000) e peso (> 0) na faixa válida", "bloqueante", "silver", t,
+              f"""SELECT COUNTIF(proficiencia <= 0 OR proficiencia >= 1000 OR peso_aluno <= 0) AS valor FROM {tab}""",
+              "==", 0),
+        # E07 · chave de relacionamento: UF derivada do município (de-para) e município existente em silver.municipio
+        Regra("E07", "Match evento x município (silver.municipio) e UF com de-para", "bloqueante", "silver", t,
+              f"""
+              SELECT 100 * COUNTIF(m.id_municipio IS NOT NULL AND e.sigla_uf IS NOT NULL) / COUNT(*) AS valor
+              FROM {tab} e
+              LEFT JOIN (SELECT DISTINCT id_municipio FROM `{{projeto}}.{{silver}}.municipio`) m USING (id_municipio)
+              """, ">=", 95.0),
+        # E08 · duplicados removidos: Bronze de eventos menos Silver (só medição; mostra a dedup trabalhando)
+        Regra("E08", "Linhas repetidas por id_evento removidas da Bronze de eventos", "informativa", "silver", t,
+              """SELECT (SELECT COUNT(*) FROM `{projeto}.{bronze}.eventos_alunos`)
+                      - (SELECT COUNT(*) FROM `{projeto}.{silver}.alunos_eventos`) AS valor"""),
+    ]
+
+
+def regras_silver(limiar_match_municipio: float = 95.0, incluir_eventos: bool = False) -> list:
     regras = []
+    if incluir_eventos:
+        regras.extend(regras_eventos_silver())
 
     # R07 · carga completa: a última rodada da Bronze tem pelo menos 95% das linhas da anterior
     for t in TABELAS_BRONZE:
@@ -172,8 +215,31 @@ def regras_silver(limiar_match_municipio: float = 95.0) -> list:
     return regras
 
 
-def regras_gold() -> list:
+def regras_eventos_gold() -> list:
+    """Regras da gold.indicador_por_origem (oficial + simulado, separados pela coluna origem)."""
+    t = "indicador_por_origem"
+    tab = "`{projeto}.{gold}.indicador_por_origem`"
+    return [
+        Regra("G03", "origem sempre preenchida com 'oficial' ou 'simulado'", "bloqueante", "gold", t,
+              f"SELECT COUNTIF(origem IS NULL OR origem NOT IN ('oficial', 'simulado')) AS valor FROM {tab}", "==", 0),
+        Regra("G04", "Chave única por origem, ano, município, série e rede", "bloqueante", "gold", t,
+              f"""SELECT COUNT(*) - COUNT(DISTINCT TO_JSON_STRING(STRUCT(origem, ano, id_municipio, serie, rede))) AS valor
+                  FROM {tab}""", "==", 0),
+        Regra("G05", "Eventos simulados chegaram à Gold (linhas com origem = 'simulado')", "bloqueante", "gold", t,
+              f"SELECT COUNTIF(origem = 'simulado') AS valor FROM {tab}", ">=", 1),
+        Regra("G06", "Taxa entre 0 e 100 nas duas origens", "bloqueante", "gold", t,
+              f"SELECT COUNTIF(taxa_alfabetizacao < 0 OR taxa_alfabetizacao > 100) AS valor FROM {tab}", "==", 0),
+        Regra("G07", "Eventos simulados não usam anos do indicador oficial (nenhum ano em comum)", "informativa", "gold", t,
+              f"""SELECT COUNT(DISTINCT s.ano) AS valor
+                  FROM {tab} s JOIN {tab} o ON o.ano = s.ano AND o.origem = 'oficial'
+                  WHERE s.origem = 'simulado'""", "==", 0),
+    ]
+
+
+def regras_gold(incluir_eventos: bool = False) -> list:
     regras = []
+    if incluir_eventos:
+        regras.extend(regras_eventos_gold())
     for t in ["municipio_meta", "uf_meta", "brasil_meta"]:
         regras.append(Regra(
             "G01", "Status de meta calculado só com taxa e meta preenchidas", "bloqueante", "gold", t,

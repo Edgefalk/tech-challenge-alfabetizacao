@@ -87,6 +87,29 @@ def executar_sql(client: bigquery.Client, arquivo: Path, cfg: dict) -> dict:
     return {"arquivo": arquivo.name, "job_id": job.job_id, "gb_processados": round(gb, 4), "duracao_s": round(duracao, 1)}
 
 
+def tabela_existe(client: bigquery.Client, id_tabela: str) -> bool:
+    try:
+        client.get_table(id_tabela)
+        return True
+    except NotFound:
+        return False
+
+
+def requisitos_pendentes(client: bigquery.Client, arquivo: Path, cfg: dict) -> list:
+    """Lê as linhas '-- @requer: projeto.dataset.tabela' do início do .sql e devolve as tabelas que não existem.
+    Serve às etapas opcionais (eventos de streaming): sem a tabela de entrada, o arquivo é pulado com aviso,
+    e a parte batch do pipeline continua funcionando num clone limpo."""
+    pendentes = []
+    for linha in arquivo.read_text(encoding="utf-8").splitlines():
+        if not linha.startswith("--"):
+            break
+        if linha.startswith("-- @requer:"):
+            tabela = linha.split(":", 1)[1].strip().format(**cfg)
+            if not tabela_existe(client, tabela):
+                pendentes.append(tabela)
+    return pendentes
+
+
 def _aprovada(valor, operador, limiar) -> bool:
     if operador is None:
         return True

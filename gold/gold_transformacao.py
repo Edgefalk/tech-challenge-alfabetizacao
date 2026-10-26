@@ -26,6 +26,8 @@ from quality.dq import (  # noqa: E402
     exigir_bloqueantes_aprovadas,
     gravar_resultados,
     novo_execucao_id,
+    requisitos_pendentes,
+    tabela_existe,
     ultima_validacao_silver_aprovada,
 )
 from quality.regras import regras_gold  # noqa: E402
@@ -49,10 +51,15 @@ def main() -> int:
 
     print("== Gold: transformações ==")
     for arquivo in sorted(PASTA_SQL.glob("*.sql")):
+        pendentes = requisitos_pendentes(client, arquivo, cfg)
+        if pendentes:
+            print(f"   {arquivo.name}: PULADO (etapa opcional; falta {', '.join(pendentes)})")
+            continue
         executar_sql(client, arquivo, cfg)
 
     print("\n== Gold: regras de qualidade ==")
-    resultados = avaliar_regras(client, regras_gold(), cfg, execucao_id)
+    com_eventos = tabela_existe(client, f"{cfg['projeto']}.{cfg['gold']}.indicador_por_origem")
+    resultados = avaliar_regras(client, regras_gold(incluir_eventos=com_eventos), cfg, execucao_id)
 
     print("\n== Gravação dos resultados ==")
     gravar_resultados(client, cfg, resultados, "gold")
