@@ -26,7 +26,9 @@ Este projeto constrói, em nuvem, um pipeline que integra as tabelas do Indicado
                             ▼                        │ portão: só roda se a
                    regras de qualidade ──► ops_tc.dq_results   última Silver foi aprovada
 
- Streaming (Pub/Sub) .......... em construção
+ Streaming (Pub/Sub) .......... implementado (seção 3.5): producer → tópico → consumer
+        └─► bronze_tc.eventos_alunos ─► silver_tc.alunos_eventos ─► gold_tc.indicador_por_origem
+            (rejeitados: ops_tc.eventos_rejeitados)                 (coluna origem: oficial | simulado)
  Qualidade (ops_tc.dq_results)  implementado (seção 3.4)
  Observabilidade .............. em construção
 ```
@@ -43,7 +45,9 @@ Todas as camadas são datasets dentro do mesmo projeto do Google Cloud, e cada c
 | `silver/` | Limpeza, padronização e integração das tabelas (`silver_transformacao.py` e os SQL em `silver/sql/`) |
 | `gold/` | Indicadores prontos para análise (`gold_transformacao.py` e os SQL em `gold/sql/`) |
 | `quality/` | Regras de qualidade de dados (`regras.py`) e funções de execução e registro em `ops.dq_results` (`dq.py`) |
-| `ops/` | Métricas de execução e monitoramento |
+| `streaming/` | Streaming: simulador (`producer.py`), consumidor em micro-lotes (`consumer.py`) e a validação dos eventos (`validacao.py`) |
+| `tests/` | Testes unitários da triagem de eventos (`python -m unittest discover -s tests -t .`) |
+| `ops/` | Reservada para as métricas de execução do pipeline (frente 4). Ainda sem código |
 | `docs/` | Documentação e evidências de execução (`evidencias/`) |
 
 Arquivos na raiz: `README.md`, `requirements.txt`, `.env.example` (modelo de configuração) e `.gitignore`.
@@ -119,6 +123,7 @@ Execução: `python silver/silver_transformacao.py` roda, em ordem, os arquivos 
 | `meta_municipio` | 37.464 | id_municipio + rede + ano_meta | Metas em formato longo (uma linha por ano de meta, 2024 a 2030); rede texto → código |
 | `meta_uf` | 567 | ano_referencia + sigla_uf + rede + ano_meta | Formato longo, guardando o ano de referência de cada linha da fonte |
 | `meta_brasil` | 21 | ano_referencia + rede + ano_meta | Formato longo, como `meta_uf` |
+| `alunos_eventos` | 5 (teste de 23/10) | id_evento | Eventos de streaming deduplicados por `id_evento`, com `origem` e latência (etapa opcional: só roda se `bronze_tc.eventos_alunos` existir) |
 | `de_para_uf` | 27 | cod_uf | Código IBGE da UF → sigla |
 | `de_para_rede_meta` | 2 | rede_texto | `Municipal` → `3`; `Pública` → `5` |
 
@@ -137,7 +142,7 @@ Detalhes: [ficha de perfil da Bronze](docs/frente3/ficha_perfil_bronze.md) e [ma
 
 ### Custo medido
 
-Uma execução completa lê cerca de **1,0 GB**, quase todo na criação de `silver_tc.alunos` (1,009 GB); as outras tabelas leem menos de 10 MB cada (execução de 21/10/2026).
+As transformações da Silver leem cerca de **1,0 GB**, quase todo na criação de `silver_tc.alunos` (1,009 GB); as outras tabelas leem menos de 10 MB cada (execução de 23/10/2026). As regras de qualidade leem outro 1 GB aproximadamente (medido por dry run em 21/10) e a Gold lê cerca de 0,14 GB (a validação cruzada lê `alunos`). Uma execução completa de Silver e Gold fica perto de **2,2 GB cobrados**.
 
 
 ## 3.3 Gold — indicadores prontos para análise
@@ -150,6 +155,7 @@ Execução: `python gold/gold_transformacao.py`. Antes de criar qualquer tabela,
 | `uf_meta` | Taxa da UF x meta do mesmo ano | Rede Pública (`5`), 2º ano |
 | `brasil_meta` | Indicador nacional oficial x meta do mesmo ano | Rede Pública (`5`), 2º ano |
 | `evolucao_municipio` | Taxa 2023, taxa 2024, variação e tendência por município e rede | Todas as redes publicadas |
+| `indicador_por_origem` | Taxa por município com a coluna `origem` (`oficial` = publicada pelo INEP; `simulado` = recalculada dos eventos de streaming) | Rede Municipal (`3`), 2º ano (etapa opcional: só roda se `silver_tc.alunos_eventos` existir) |
 | `validacao_cruzada` | Taxa recalculada a partir de `alunos` x taxa oficial, por município, UF e Brasil | Redes publicadas; redes agregadas reconstruídas a partir das redes dos alunos |
 
 **Regras da Gold:**
@@ -191,14 +197,53 @@ Em 2024, 99,5% dos municípios (rede municipal) ficam a até 0,5 p.p. da taxa of
 
 As regras ficam em [`quality/regras.py`](quality/regras.py) e o catálogo completo, com limiares e justificativas, em [`docs/frente3/regras_qualidade.md`](docs/frente3/regras_qualidade.md).
 
-- **Bloqueantes** (34 na Silver e 6 na Gold): carga completa da Bronze, chave única, nulo em chave, código sem tradução, faixas válidas, alinhamento de proficiência e peso, coerência dos status e **taxa de match de cada join** (municipio × meta municipal e uf × meta estadual, limiar de 95% justificado no catálogo). Se alguma reprova, o script termina com código 1 e a Gold não é publicada.
-- **Informativas** (5 na Silver e 3 na Gold): registram e seguem. Três reprovam de propósito com o dado atual: taxas de 2023 divergentes entre duas tabelas da fonte (R09), 18 cadernos fora da faixa (R10) e 25 UFs em vez de 27 (R11).
+- **Bloqueantes** (41 na Silver, 7 delas dos eventos de streaming, e 10 na Gold, 4 delas da tabela com `origem`): carga completa da Bronze, chave única, nulo em chave, código sem tradução, faixas válidas, alinhamento de proficiência e peso, coerência dos status e **taxa de match de cada join** (municipio × meta municipal e uf × meta estadual, limiar de 95% justificado no catálogo). Se alguma reprova, o script termina com código 1 e a Gold não é publicada.
+- **Informativas** (6 na Silver e 4 na Gold): registram e seguem. Três reprovam de propósito com o dado atual: taxas de 2023 divergentes entre duas tabelas da fonte (R09), 18 cadernos fora da faixa (R10) e 25 UFs em vez de 27 (R11).
 - **Registro persistente:** cada regra vira uma linha em `ops.dq_results` (execução, horário, tabela, regra, severidade, valor medido, limiar e status), gravada por **load job em modo append**. O histórico acumula entre execuções. Uma cópia de cada execução fica em `docs/evidencias/dq_<execucao>.csv`.
 - **Sem `except` genérico:** só a exceção específica de regra bloqueante é tratada, e o processo termina com erro.
 
 **Falha demonstrada:** `python silver/silver_transformacao.py --simular-falha` eleva o limiar de match da R04 para 99,9%. Na execução `silver_20261021_160213_34ac17` a R04 reprovou (97,32%), o resultado ficou gravado em `ops.dq_results`, o script terminou com código 1 e a Gold se recusou a rodar. Logs em [`docs/evidencias/falha_demonstrada/`](docs/evidencias/falha_demonstrada/).
 
 Revisão contra as armadilhas do enunciado: [`docs/frente3/checklist_armadilhas.md`](docs/frente3/checklist_armadilhas.md).
+
+
+## 3.5 Streaming — eventos em tempo quase real
+
+Simula a chegada de novas medições de alunos e leva cada evento até a camada analítica, sempre com a coluna `origem`.
+
+```
+producer ──► Pub/Sub (topico-alfabetizacao) ──► consumer (micro-lotes de até 10 mensagens)
+                                                   ├─ válido    ─► bronze_tc.eventos_alunos (load job, append)
+                                                   ├─ rejeitado ─► ops_tc.eventos_rejeitados (motivo + mensagem original)
+                                                   └─ duplicado ─► ignorado (só é confirmado)
+bronze_tc.eventos_alunos ─► silver_tc.alunos_eventos (dedup por id_evento) ─► gold_tc.indicador_por_origem
+```
+
+- **Producer** (`streaming/producer.py`): cada evento tem `id_evento` único, `horario_producao` (UTC, com fuso) e `origem = 'simulado'`, no formato e nos tipos de `silver_tc.alunos`. A proficiência é sorteada na faixa real (580 a 900) e `alfabetizado` é derivada do corte de 743. Envia também, de propósito, 1 evento duplicado (mesmo `id_evento`) e 1 inválido (sem `id_municipio`).
+- **Consumer** (`streaming/consumer.py`): lê em micro-lotes, classifica cada mensagem (`streaming/validacao.py`), grava por load job e **só depois confirma (ack)**. Se a gravação falhar, as mensagens não são confirmadas e o Pub/Sub as entrega de novo. A assinatura confirma em 10 s por padrão; o consumer pede 60 s antes de gravar, para uma gravação lenta não causar reentrega.
+- **Rejeitados:** tabela de 4 colunas fixas (`id_evento`, `horario_recebimento`, `motivo_rejeicao`, `mensagem_bruta`). A mensagem original fica inteira, então até um JSON quebrado cabe na tabela.
+- **Silver** (`silver/sql/08_alunos_eventos.sql`): fica a linha recebida primeiro de cada `id_evento`. Regras E01 a E08 (seção 3.4): chave única, sem nulos, `origem` sempre `simulado`, **latência maior que zero**, `alfabetizado` coerente com 743, faixas e match do município.
+- **Gold** (`gold/sql/06_indicador_por_origem.sql`): uma tabela com a taxa por município e a coluna `origem`. O número do simulador **não é indicador oficial**: as duas origens só dividem a tabela porque `origem` as separa, e nenhuma consulta deve somá-las ou compará-las sem filtrar. Os eventos usam o ano 2026, que não existe no indicador oficial (regra G07).
+
+### Batch × streaming (números do teste de 23/10/2026)
+
+| | Batch (Bronze) | Streaming (eventos) |
+|---|---|---|
+| Latência | intervalo entre a atualização da fonte e a próxima execução manual do script (horas ou dias; não é medida como latência) | **0,91 a 17,11 s** por evento (mediana 14,45 s, média 12,10 s), medida como recebimento menos produção |
+| Frequência | carga completa sob demanda (2 rodadas até agora) | micro-lotes de até 10 mensagens, um load job por lote |
+| Garantia | contagem conferida (origem = baixada = acrescentada) e Silver usa só a última ingestão | entrega **pelo menos uma vez**; dedup por `id_evento` no consumer e na Silver; ack só depois de gravar |
+| Dado ruim | regra bloqueante interrompe a Silver e a Gold | evento inválido vai para rejeitados, sem derrubar o consumer |
+
+A latência de 17 s não vem do Pub/Sub: o consumer é sequencial e cada lote espera um load job do BigQuery (alguns segundos). A inserção por streaming do BigQuery daria menos de 1 s, mas é bloqueada no sandbox e não foi usada. Os eventos seguintes esperam o consumer terminar a gravação anterior.
+
+Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/streaming/teste_colab_2026-10-23.md).
+
+### Limitações do streaming
+
+- O dado é **simulado** (7 mensagens, 1 município) e serve para demonstrar o fluxo, não para análise.
+- A evidência de 23/10 vem do notebook equivalente executado no Google Colab. Os scripts de `streaming/` têm a mesma lógica, testada por testes unitários (`tests/`), mas ainda não foram executados contra o Pub/Sub.
+- A deduplicação em memória do consumer zera quando ele reinicia; a Silver deduplica de novo por `id_evento`.
+- A etapa é opcional: sem `bronze_tc.eventos_alunos`, a Silver e a Gold pulam os eventos e o restante do pipeline roda normalmente.
 
 
 ## 4. Como reproduzir
@@ -241,6 +286,16 @@ Revisão contra as armadilhas do enunciado: [`docs/frente3/checklist_armadilhas.
    python gold/gold_transformacao.py
    ```
    Para demonstrar a falha: `python silver/silver_transformacao.py --simular-falha`. Depois, rode a Silver normal de novo para liberar a Gold.
+7. (Opcional) Streaming: em um terminal, deixe o consumer escutando e, em outro, rode o producer. Depois, rode de novo a Silver e a Gold para levar os eventos até `gold_tc.indicador_por_origem`:
+   ```bash
+   python streaming/consumer.py      # terminal 1: fica escutando
+   python streaming/producer.py      # terminal 2: 5 válidos, 1 duplicado, 1 inválido
+   ```
+   O login do Google precisa ter permissão de publicar e assinar no Pub/Sub e de gravar em `bronze_tc` e `ops_tc`.
+8. Testes unitários da triagem de eventos (sem GCP):
+   ```bash
+   python -m unittest discover -s tests -t .
+   ```
 
 ### Passo a passo (Google Colab)
 

@@ -29,6 +29,8 @@ from quality.dq import (  # noqa: E402
     exigir_bloqueantes_aprovadas,
     gravar_resultados,
     novo_execucao_id,
+    requisitos_pendentes,
+    tabela_existe,
 )
 from quality.regras import regras_silver  # noqa: E402
 
@@ -50,13 +52,21 @@ def main(argv=None) -> int:
 
     print("== Silver: transformações ==")
     for arquivo in sorted(PASTA_SQL.glob("*.sql")):
+        pendentes = requisitos_pendentes(client, arquivo, cfg)
+        if pendentes:
+            print(f"   {arquivo.name}: PULADO (etapa opcional; falta {', '.join(pendentes)})")
+            continue
         executar_sql(client, arquivo, cfg)
 
     print("\n== Silver: regras de qualidade ==")
     limiar_r04 = 99.9 if args.simular_falha else 95.0
     if args.simular_falha:
         print("   (simulação de falha: limiar da R04 elevado para 99,9%)")
-    resultados = avaliar_regras(client, regras_silver(limiar_match_municipio=limiar_r04), cfg, execucao_id)
+    # As regras dos eventos só entram se a Silver de eventos foi criada nesta execução
+    com_eventos = tabela_existe(client, f"{cfg['projeto']}.{cfg['silver']}.alunos_eventos")
+    resultados = avaliar_regras(
+        client, regras_silver(limiar_match_municipio=limiar_r04, incluir_eventos=com_eventos), cfg, execucao_id
+    )
 
     print("\n== Gravação dos resultados ==")
     gravar_resultados(client, cfg, resultados, "silver")

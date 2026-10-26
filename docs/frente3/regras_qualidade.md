@@ -33,6 +33,28 @@ Implementadas em `quality/regras.py` e executadas por `silver/silver_transformac
 | V01 | Informativa | Validação cruzada Brasil 2024: diferença entre taxa recalculada e oficial | validacao_cruzada | ≤ 0,5 p.p. |
 | V02 | Informativa | Validação cruzada municípios 2024: % a até 0,5 p.p. da oficial | validacao_cruzada | ≥ 95% |
 
+## Eventos de streaming (silver.alunos_eventos e gold.indicador_por_origem)
+
+Entram na execução só quando `bronze_tc.eventos_alunos` (Silver) ou `silver_tc.alunos_eventos` (Gold) existem.
+
+| ID | Tipo | Regra | Onde | Limiar |
+|---|---|---|---|---|
+| E01 | Bloqueante | Chave única: um `id_evento` por linha (deduplicação) | alunos_eventos | 0 duplicadas |
+| E02 | Bloqueante | Sem nulo em `id_evento`, `origem`, `id_municipio`, `id_aluno`, `ano` e horários | alunos_eventos | 0 |
+| E03 | Bloqueante | Toda linha tem `origem = 'simulado'` | alunos_eventos | 0 violações |
+| E04 | Bloqueante | Latência medida e maior que zero (carimbos iguais dariam zero e a medida não mediria nada) | alunos_eventos | 0 violações |
+| E05 | Bloqueante | `alfabetizado` coerente com a proficiência (corte de 743) | alunos_eventos | 0 |
+| E06 | Bloqueante | Proficiência entre 0 e 1000 e peso > 0 | alunos_eventos | 0 |
+| E07 | Bloqueante | Match evento × município (`silver.municipio`) e UF com de-para | alunos_eventos | ≥ 95% |
+| E08 | Informativa | Linhas repetidas por `id_evento` removidas da Bronze de eventos | alunos_eventos | só medição |
+| G03 | Bloqueante | `origem` sempre `oficial` ou `simulado` | indicador_por_origem | 0 |
+| G04 | Bloqueante | Chave única por origem, ano, município, série e rede | indicador_por_origem | 0 |
+| G05 | Bloqueante | Os eventos simulados chegaram à Gold | indicador_por_origem | ≥ 1 linha |
+| G06 | Bloqueante | Taxa entre 0 e 100 nas duas origens | indicador_por_origem | 0 |
+| G07 | Informativa | Eventos simulados não usam anos do indicador oficial | indicador_por_origem | 0 anos em comum |
+
+Resultado da execução de 23/10/2026: todas aprovadas; E08 = 0 (o consumer já havia deduplicado em memória, então a Bronze não tinha repetição).
+
 ## Justificativa dos limiares de match
 
 - **R04 (95%):** observado 97,32% (2023) e 98,24% (2024). Os municípios sem par não são erro de chave: não têm meta pactuada e entram no estado "sem meta". Um erro real de chave (tipo, de-para de rede, formato do código) derruba o match para perto de zero.
