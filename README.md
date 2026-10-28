@@ -43,7 +43,7 @@ Todas as camadas são datasets dentro do mesmo projeto do Google Cloud, e cada c
 |---|---|
 | `bronze/` | Ingestão batch: dado bruto, só acrescenta (`bronze_ingestao.py` e o notebook equivalente `bronze_ingestao.ipynb`) |
 | `silver/` | Limpeza, padronização e integração das tabelas (`silver_transformacao.py` e os SQL em `silver/sql/`) |
-| `gold/` | Indicadores prontos para análise (`gold_transformacao.py` e os SQL em `gold/sql/`) |
+| `gold/` | Indicadores prontos para análise (`gold_transformacao.py` e os SQL em `gold/sql/`) e a cópia da Gold em Parquet para a Fase 3 (`exportar_gold.py` e `gold/export/`) |
 | `quality/` | Regras de qualidade de dados (`regras.py`) e funções de execução e registro em `ops.dq_results` (`dq.py`) |
 | `streaming/` | Streaming: simulador (`producer.py`), consumidor em micro-lotes (`consumer.py`) e a validação dos eventos (`validacao.py`) |
 | `tests/` | Testes unitários da triagem de eventos (`python -m unittest discover -s tests -t .`) |
@@ -142,7 +142,17 @@ Detalhes: [ficha de perfil da Bronze](docs/frente3/ficha_perfil_bronze.md) e [ma
 
 ### Custo medido
 
-As transformações da Silver leem cerca de **1,0 GB**, quase todo na criação de `silver_tc.alunos` (1,009 GB); as outras tabelas leem menos de 10 MB cada (execução de 23/10/2026). As regras de qualidade leem outro 1 GB aproximadamente (medido por dry run em 21/10) e a Gold lê cerca de 0,14 GB (a validação cruzada lê `alunos`). Uma execução completa de Silver e Gold fica perto de **2,2 GB cobrados**.
+Medido por dry run (o BigQuery informa os bytes que a consulta leria, sem executá-la):
+
+| Etapa | Leitura | Medição |
+|---|---:|---|
+| SQL da Silver (`silver/sql/`) | 1,02 GB | dry run de 28/10/2026; 1,009 GB só em `silver_tc.alunos`, as outras tabelas leem menos de 10 MB cada |
+| Regras de qualidade da Silver | ≈ 1,0 GB | dry run de 21/10/2026 |
+| SQL da Gold (`gold/sql/`) | 0,14 GB | dry run de 28/10/2026; 0,137 GB na validação cruzada, que lê `alunos` |
+| Regras de qualidade da Gold | ≈ 0,13 GB | dry run de 21/10/2026 |
+| **Execução completa (Silver + Gold + regras)** | **≈ 2,3 GB** | soma das linhas acima |
+
+A leitura da Silver é proporcional ao tamanho da Bronze inteira: a Bronze não é particionada, então filtrar a ingestão mais recente não reduz os bytes lidos. Com 2 cargas na Bronze, `silver_tc.alunos` lê 1,009 GB, o tamanho de `bronze_tc.alunos`.
 
 
 ## 3.3 Gold — indicadores prontos para análise
@@ -191,6 +201,12 @@ Em 2024, 99,5% dos municípios (rede municipal) ficam a até 0,5 p.p. da taxa of
 **Anomalia documentada:** para o Brasil em 2023, o recálculo dá 57,46 e a tabela de meta publica 55,9. Como UFs e municípios de 2023 batem com o microdado (diferença média de 0,03 a 0,05 p.p.), a divergência está no número nacional de 2023 da tabela de meta, e não no pipeline. A causa não foi confirmada.
 
 **Para a Fase 3:** `status_meta` e `distancia_meta` são derivadas de `taxa_alfabetizacao`. Se a taxa for o alvo de um modelo, essas colunas não podem entrar como features (vazamento de alvo).
+
+### Cópia da Gold para a Fase 3
+
+As tabelas do BigQuery podem expirar (o sandbox expira tabelas em 60 dias). Por isso a Gold fica guardada também em [`gold/export/`](gold/export/): um arquivo Parquet por tabela e um `manifesto.csv` com as linhas no BigQuery, as linhas exportadas, a última modificação da tabela e o horário da cópia.
+
+Para gerar de novo, depois da Gold: `python gold/exportar_gold.py`. O script lê as tabelas pela API de leitura (sem consulta SQL, então sem bytes cobrados) e termina com código 1 se alguma contagem divergir. Cópia atual: 28/10/2026, das tabelas publicadas em 23/10/2026 (6 tabelas, 58.638 linhas, cerca de 1 MB).
 
 
 ## 3.4 Qualidade de dados
@@ -286,6 +302,8 @@ Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/st
    python gold/gold_transformacao.py
    ```
    Para demonstrar a falha: `python silver/silver_transformacao.py --simular-falha`. Depois, rode a Silver normal de novo para liberar a Gold.
+
+   Para guardar a Gold em Parquet (`gold/export/`): `python gold/exportar_gold.py`.
 7. (Opcional) Streaming: em um terminal, deixe o consumer escutando e, em outro, rode o producer. Depois, rode de novo a Silver e a Gold para levar os eventos até `gold_tc.indicador_por_origem`:
    ```bash
    python streaming/consumer.py      # terminal 1: fica escutando
