@@ -75,16 +75,18 @@ def novo_execucao_id(etapa: str) -> str:
     return f"{etapa}_{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}"
 
 
-def executar_sql(client: bigquery.Client, arquivo: Path, cfg: dict) -> dict:
-    """Executa um arquivo .sql (pode ter várias instruções) com os marcadores preenchidos pelo .env."""
+def executar_sql(client: bigquery.Client, arquivo: Path, cfg: dict, job_config=None) -> dict:
+    """Executa um arquivo .sql (pode ter várias instruções) com os marcadores preenchidos pelo .env.
+    job_config (opcional) leva os labels de custo da Frente 4 (ops/run_logger.py)."""
     sql = arquivo.read_text(encoding="utf-8").format(**cfg)
     inicio = datetime.now(timezone.utc)
-    job = client.query(sql)
+    job = client.query(sql, job_config=job_config)
     job.result()  # erro de SQL interrompe aqui, de propósito
     duracao = (datetime.now(timezone.utc) - inicio).total_seconds()
     gb = (job.total_bytes_processed or 0) / 1e9
     print(f"   {arquivo.name}: ok | job {job.job_id} | {gb:.3f} GB processados | {duracao:.1f} s")
-    return {"arquivo": arquivo.name, "job_id": job.job_id, "gb_processados": round(gb, 4), "duracao_s": round(duracao, 1)}
+    return {"arquivo": arquivo.name, "job_id": job.job_id, "gb_processados": round(gb, 4), "duracao_s": round(duracao, 1),
+            "job": job, "sql": sql}
 
 
 def tabela_existe(client: bigquery.Client, id_tabela: str) -> bool:
@@ -118,11 +120,11 @@ def _aprovada(valor, operador, limiar) -> bool:
     return {"==": valor == limiar, "<=": valor <= limiar, ">=": valor >= limiar}[operador]
 
 
-def avaliar_regras(client: bigquery.Client, regras: list, cfg: dict, execucao_id: str) -> list:
+def avaliar_regras(client: bigquery.Client, regras: list, cfg: dict, execucao_id: str, job_config=None) -> list:
     executado_em = datetime.now(timezone.utc)
     resultados = []
     for r in regras:
-        linhas = list(client.query(r.sql.format(**cfg)).result())
+        linhas = list(client.query(r.sql.format(**cfg), job_config=job_config).result())
         valor = linhas[0]["valor"] if linhas else None
         valor = float(valor) if valor is not None else None
         if r.operador is None:

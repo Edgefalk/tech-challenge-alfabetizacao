@@ -30,7 +30,8 @@ Este projeto constrói, em nuvem, um pipeline que integra as tabelas do Indicado
         └─► bronze_tc.eventos_alunos ─► silver_tc.alunos_eventos ─► gold_tc.indicador_por_origem
             (rejeitados: ops_tc.eventos_rejeitados)                 (coluna origem: oficial | simulado)
  Qualidade (ops_tc.dq_results)  implementado (seção 3.4)
- Observabilidade .............. em construção
+ Observabilidade .............. implementado (seção 7): cada etapa da Silver e da Gold ─► ops_tc.pipeline_runs
+                                falha ─► log tc-pipeline (ERROR) ─► alerta por e-mail
 ```
 
 Todas as camadas são datasets dentro do mesmo projeto do Google Cloud, e cada camada lê a anterior.
@@ -47,8 +48,8 @@ Todas as camadas são datasets dentro do mesmo projeto do Google Cloud, e cada c
 | `quality/` | Regras de qualidade de dados (`regras.py`) e funções de execução e registro em `ops.dq_results` (`dq.py`) |
 | `streaming/` | Streaming: simulador (`producer.py`), consumidor em micro-lotes (`consumer.py`) e a validação dos eventos (`validacao.py`) |
 | `tests/` | Testes unitários da triagem de eventos (`python -m unittest discover -s tests -t .`) |
-| `ops/` | Reservada para as métricas de execução do pipeline (frente 4). Ainda sem código |
-| `docs/` | Documentação da frente de Silver/Gold (`frente3/`) e evidências de execução (`evidencias/`: Bronze, qualidade, falha demonstrada, streaming e FinOps) |
+| `ops/` | Observabilidade e FinOps (frente 4): registro de cada etapa em `ops_tc.pipeline_runs` (`run_logger.py`), teste do alerta (`testar_alerta.py`), política do alerta (`alerta_falha.json`), catálogo (`gerar_catalogo.py`), medição das tabelas (`medir_tabelas.py`) e os SQL em `ops/sql/` |
+| `docs/` | Documentação da frente de Silver/Gold (`frente3/`) e evidências de execução (`evidencias/`: Bronze, qualidade, falha demonstrada, streaming e FinOps). Da frente 4: custo (`finops/`), catálogo de dados (`catalogo/`), plano, registro de ações e print do alerta (`frente4/`), diagrama (`arquitetura.md`), números com fonte (`numeros.md`) e roteiro do vídeo (`roteiro_video.md`) |
 
 Arquivos na raiz: `README.md`, `requirements.txt`, `.env.example` (modelo de configuração) e `.gitignore`.
 
@@ -396,7 +397,70 @@ Versões fixadas em `requirements.txt`.
 
 **Custo medido:** seção 3.2 (≈ 2,3 GB lidos por execução completa de Silver e Gold).
 
-*Métricas de execução, alerta de falha e tabela de custo projetado: em construção pela frente 4.*
+Monitoramento e FinOps são da frente 4. O detalhe está em [`docs/frente4/`](docs/frente4/) e [`docs/finops/`](docs/finops/), e cada número citado tem a fonte em [`docs/numeros.md`](docs/numeros.md).
+
+### 7.1 Métricas de execução: o que aconteceu em cada etapa
+
+| Peça | O que faz |
+|---|---|
+| `ops_tc.pipeline_runs` | Uma linha por etapa e execução: início, fim, duração, linhas gravadas, status (`sucesso` ou `falha`), erro, IDs dos jobs e bytes. Só acrescenta (load job) e é particionada por dia |
+| [`ops/run_logger.py`](ops/run_logger.py) | `with registrar_etapa(...)` grava a linha e escreve um log no Cloud Logging (log `tc-pipeline`): INFO no sucesso, ERROR na falha. `job_config()` põe os labels `pipeline`, `camada` e `etapa` nos jobs e um teto de 10 GiB por consulta |
+| Silver e Gold | Cada arquivo SQL vira uma etapa (`silver_02_municipio`, `gold_01_municipio_meta` etc.). As regras de qualidade viram `silver_regras` e `gold_regras`, e o portão da Gold vira `gold_portao`. O `execucao_id` é o mesmo de `ops_tc.dq_results` |
+| `ops_tc.vw_custo_por_etapa` | Bytes faturados e custo por camada e etapa nos últimos 30 dias, a partir dos labels dos jobs |
+| Alerta "Pipeline TC - falha" | Política do Cloud Monitoring ([`ops/alerta_falha.json`](ops/alerta_falha.json)), disparada por log ERROR em `tc-pipeline`. Manda e-mail para o responsável da frente 4 |
+
+Para ver uma execução, use o `execucao_id` que o script imprime:
+
+```sql
+SELECT etapa, status, duracao_seg, linhas_saida, ROUND(bytes_faturados / POW(1024, 3), 3) AS gib_faturados, erro
+FROM `project-ce782257-1c9c-4b6f-87a.ops_tc.pipeline_runs`
+WHERE execucao_id = 'silver_AAAAMMDD_HHMMSS_xxxxxx'
+ORDER BY inicio;
+```
+
+**Situação em 28/10/2026:** `pipeline_runs` tem só as 4 linhas dos testes do alerta (`etapa = 'teste_frente4'`). A primeira execução real da Silver e da Gold fica registrada na próxima rodada. A Bronze e o streaming ainda não usam o logger.
+
+### 7.2 Quem descobre que quebrou, e em quanto tempo?
+
+**O responsável pela frente 4 recebe um e-mail cerca de 1 minuto depois da falha**, sem precisar olhar nenhuma tabela.
+
+1. A etapa que falha grava `falha` em `ops_tc.pipeline_runs`, com a mensagem do erro, e escreve um log ERROR em `tc-pipeline`.
+2. O log dispara a política "Pipeline TC - falha", que manda o e-mail com a etapa e onde olhar.
+3. Se a falha é de qualidade, a regra bloqueante também grava `reprovada` em `ops_tc.dq_results` e a Gold não roda (seção 3.4).
+
+**Medido em 28/10/2026**, com `python -m ops.testar_alerta` (execução `teste_20261028_232024_f5c54d`):
+
+| Momento | Horário (Brasília) |
+|---|---|
+| Falha simulada gravada (linha em `pipeline_runs` e log ERROR) | 20:20:29 |
+| Alerta aberto no Cloud Monitoring | 20:21:21 (52 s depois) |
+| E-mail recebido | 20:21 |
+
+Print do alerta: [`docs/frente4/evidencias/alerta_aberto_20261028.jpg`](docs/frente4/evidencias/alerta_aberto_20261028.jpg). Com o pipeline real, `python silver/silver_transformacao.py --simular-falha` faz a etapa `silver_regras` falhar e dispara o mesmo e-mail; depois, uma Silver normal libera a Gold de novo.
+
+**Limites:** só avisam as etapas que usam o logger. Sai no máximo 1 e-mail a cada 5 minutos, e o alerta fecha sozinho 30 minutos depois da última falha; falhas seguidas dentro desses 5 minutos não geram novos e-mails, mas todas ficam em `pipeline_runs`. Quem roda o pipeline precisa de permissão para gravar logs (`roles/logging.logWriter` ou Editor); sem ela, a linha é gravada, mas o e-mail não sai.
+
+### 7.3 Tabela de custo
+
+Detalhe em [`docs/finops/tabela_custo.md`](docs/finops/tabela_custo.md) (serviço, unidade, quantidade medida, preço unitário e custo mensal).
+
+- **Ambiente:** o projeto começou no sandbox do BigQuery e tem faturamento ativo desde 28/10/2026, numa conta de avaliação (free trial). O uso medido fica dentro das franquias gratuitas mensais, e o orçamento registra **R$ 0,00 gastos de R$ 50,00** (print de 28/10).
+- **Consumo real (17/10 a 26/10):** 418 consultas e 20,41 GiB faturados; a preço de São Paulo, ≈ US$ 0,22 sem a franquia.
+- **Preço em São Paulo:** US$ 11,25 por TiB de consulta, contra US$ 6,25 nos EUA.
+- **Projeção para produção** (batch diário, 1 evento por segundo, 1 alerta):
+
+| Cenário | Consultas no mês 6 | Total por mês, sem franquia gratuita |
+|---|---:|---:|
+| A: desenho atual, a Silver relê toda a Bronze a cada execução | US$ 26,62 | ≈ US$ 28,93 |
+| B: Bronze particionada por ingestão; a Silver lê só a última carga | US$ 0,55 | ≈ US$ 0,89 |
+
+**Alavancas medidas:** ler só as colunas usadas reduz a leitura em **81%**; filtrar a partição por ano, em **45%**; o logger aplica um teto de 10 GiB por consulta.
+
+**Streaming em produção:** com 1 evento por segundo, o consumer atual faria pelo menos 8.640 load jobs por dia (lotes de até 10 mensagens), acima da cota de 1.500 por tabela por dia. Em produção a gravação seria pela Storage Write API: cerca de 2,5 GiB por mês, dentro dos 2 TiB gratuitos.
+
+### 7.4 Catálogo de dados
+
+[`docs/catalogo/catalogo_dados.md`](docs/catalogo/catalogo_dados.md) tem as 27 tabelas e a view de custo, com dono provável, finalidade, colunas, partição e expiração. Para regerar: `python ops/gerar_catalogo.py`.
 
 ## 8. Aplicação em IA
 
