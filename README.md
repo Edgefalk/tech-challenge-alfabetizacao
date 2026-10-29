@@ -48,7 +48,7 @@ Todas as camadas são datasets dentro do mesmo projeto do Google Cloud, e cada c
 | `streaming/` | Streaming: simulador (`producer.py`), consumidor em micro-lotes (`consumer.py`) e a validação dos eventos (`validacao.py`) |
 | `tests/` | Testes unitários da triagem de eventos (`python -m unittest discover -s tests -t .`) |
 | `ops/` | Reservada para as métricas de execução do pipeline (frente 4). Ainda sem código |
-| `docs/` | Documentação e evidências de execução (`evidencias/`) |
+| `docs/` | Documentação da frente de Silver/Gold (`frente3/`) e evidências de execução (`evidencias/`: Bronze, qualidade, falha demonstrada, streaming e FinOps) |
 
 Arquivos na raiz: `README.md`, `requirements.txt`, `.env.example` (modelo de configuração) e `.gitignore`.
 
@@ -78,6 +78,8 @@ Destino: `<projeto>.bronze_tc.<tabela>`, com o mesmo nome da tabela de origem.
 |---|---|---|
 | `_ingestion_timestamp` | TIMESTAMP | Data e hora (UTC) da execução. É igual para todas as tabelas da mesma execução |
 | `_source` | STRING | Tabela de origem completa (por exemplo, `basedosdados.br_inep_avaliacao_alfabetizacao.municipio`) |
+
+O `_ingestion_timestamp` faz o papel de identificador da execução: ele é gravado uma vez por execução, igual em todas as tabelas, então separa uma carga da outra sem uma coluna `execucao_id` própria. A coluna `_source` registra a tabela oficial de origem; a distinção entre dado oficial e simulado fica na coluna `origem` das tabelas de eventos (seção 3.5), já que a Bronze batch só recebe dado oficial.
 
 ### Política de escrita
 
@@ -204,7 +206,7 @@ Em 2024, 99,5% dos municípios (rede municipal) ficam a até 0,5 p.p. da taxa of
 
 ### Cópia da Gold para a Fase 3
 
-As tabelas do BigQuery podem expirar (o sandbox expira tabelas em 60 dias). Por isso a Gold fica guardada também em [`gold/export/`](gold/export/): um arquivo Parquet por tabela e um `manifesto.csv` com as linhas no BigQuery, as linhas exportadas, a última modificação da tabela e o horário da cópia.
+As tabelas do BigQuery podem expirar: os datasets foram criados no sandbox, com expiração padrão de 60 dias, que continua valendo depois da ativação do faturamento até ser removida. Por isso a Gold fica guardada também em [`gold/export/`](gold/export/): um arquivo Parquet por tabela e um `manifesto.csv` com as linhas no BigQuery, as linhas exportadas, a última modificação da tabela e o horário da cópia.
 
 Para gerar de novo, depois da Gold: `python gold/exportar_gold.py`. O script lê as tabelas pela API de leitura (sem consulta SQL, então sem bytes cobrados) e termina com código 1 se alguma contagem divergir. Cópia atual: 28/10/2026, das tabelas publicadas em 23/10/2026 (6 tabelas, 58.638 linhas, cerca de 1 MB).
 
@@ -250,7 +252,7 @@ bronze_tc.eventos_alunos ─► silver_tc.alunos_eventos (dedup por id_evento) �
 | Garantia | contagem conferida (origem = baixada = acrescentada) e Silver usa só a última ingestão | entrega **pelo menos uma vez**; dedup por `id_evento` no consumer e na Silver; ack só depois de gravar |
 | Dado ruim | regra bloqueante interrompe a Silver e a Gold | evento inválido vai para rejeitados, sem derrubar o consumer |
 
-A latência de 17 s não vem do Pub/Sub: o consumer é sequencial e cada lote espera um load job do BigQuery (alguns segundos). A inserção por streaming do BigQuery daria menos de 1 s, mas é bloqueada no sandbox e não foi usada. Os eventos seguintes esperam o consumer terminar a gravação anterior.
+A latência de 17 s não vem do Pub/Sub: o consumer é sequencial e cada lote espera um load job do BigQuery (alguns segundos). A inserção por streaming do BigQuery daria menos de 1 s, mas não foi usada: o teste rodou quando o projeto ainda estava no sandbox, que a bloqueia. O faturamento foi ativado em 28/10/2026 e ela passou a ser possível, mas o consumer segue com load job, que é gratuito. Os eventos seguintes esperam o consumer terminar a gravação anterior.
 
 Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/streaming/teste_colab_2026-10-23.md).
 
@@ -266,9 +268,31 @@ Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/st
 
 ### Pré-requisitos
 
-- Python 3.10 ou superior.
-- Um projeto no Google Cloud com o BigQuery ativo e os datasets das camadas já criados (nomes em `.env.example`).
-- Permissão no projeto para criar tabelas e rodar jobs no BigQuery.
+- Python 3.10 ou superior e o [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud` e `bq`).
+- Um projeto no Google Cloud com o BigQuery ativo. O batch (Bronze, Silver, Gold e qualidade) roda inclusive no sandbox do BigQuery, porque grava só por load job e `CREATE TABLE`. O streaming usa o Pub/Sub, que exige faturamento ativo no projeto.
+- Permissão no projeto para criar datasets e tabelas e rodar jobs no BigQuery (e, para o streaming, publicar e assinar no Pub/Sub).
+- Custo de referência: cerca de 2,3 GB lidos por execução completa de Silver e Gold (seção 3.2). A ingestão da Bronze não usa consulta SQL.
+
+### Preparar um projeto novo (só na primeira vez)
+
+Quem usa o projeto do grupo pode pular esta parte: os datasets e o tópico já existem. Para rodar em outro projeto, troque `SEU_PROJETO` pelo ID do projeto e crie os 4 datasets na mesma região:
+
+```bash
+bq --location=southamerica-east1 mk --dataset SEU_PROJETO:bronze_tc
+bq --location=southamerica-east1 mk --dataset SEU_PROJETO:silver_tc
+bq --location=southamerica-east1 mk --dataset SEU_PROJETO:gold_tc
+bq --location=southamerica-east1 mk --dataset SEU_PROJETO:ops_tc
+```
+
+Para o streaming (opcional), ative a API e crie o tópico e a assinatura com os nomes do `.env.example`:
+
+```bash
+gcloud services enable pubsub.googleapis.com --project=SEU_PROJETO
+gcloud pubsub topics create topico-alfabetizacao --project=SEU_PROJETO
+gcloud pubsub subscriptions create topico-alfabetizacao-sub --topic=topico-alfabetizacao --project=SEU_PROJETO
+```
+
+As tabelas são criadas pelos próprios scripts.
 
 ### Passo a passo (computador local)
 
@@ -336,18 +360,64 @@ Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/st
    !python gold/gold_transformacao.py
    ```
 
-## 5. Decisões e trade-offs
+## 5. Tecnologias utilizadas
 
-- **Nuvem: Google Cloud.** Os dados oficiais já estão no BigQuery, então não há transferência entre nuvens. Projeto do grupo: `Tech Challenge` (ID `project-ce782257-1c9c-4b6f-87a`).
-- **Fonte: leitura direta do BigQuery, sem baixar arquivos manualmente.** A leitura é feita pela API de leitura de tabelas, sem consulta SQL. Quando a Base dos Dados atualizar, basta uma nova execução. O volume lido será medido pela frente de FinOps.
+| Tecnologia | Uso no projeto | Por quê |
+|---|---|---|
+| Google Cloud · BigQuery | Bronze, Silver, Gold e `ops` (4 datasets em `southamerica-east1`) | as tabelas oficiais já estão no BigQuery da Base dos Dados; SQL, armazenamento e processamento no mesmo serviço |
+| Google Cloud · Pub/Sub | mensageria do streaming (`topico-alfabetizacao`) | serviço gerenciado de mensagens do GCP, com entrega "pelo menos uma vez" |
+| Cloud Monitoring e Cloud Billing | alerta de falha e orçamento com alerta por e-mail (seção 7) | ferramentas nativas do mesmo projeto |
+| Python 3 | scripts de ingestão, Silver, Gold, qualidade, exportação e streaming | bibliotecas oficiais do Google (`google-cloud-bigquery`, `google-cloud-pubsub`) |
+| SQL (BigQuery) | transformações da Silver e da Gold, um arquivo por tabela | versionável e legível; o processamento roda no BigQuery, não na máquina de quem executa |
+| pandas e pyarrow | carga da Bronze, gravação de `dq_results` e cópia da Gold em Parquet | |
+| `unittest` | testes da triagem de eventos (`tests/`) | biblioteca padrão, sem dependência extra |
 
-## 6. Monitoramento, FinOps, qualidade e aplicação em IA
+Versões fixadas em `requirements.txt`.
 
-*Em construção.* Qualidade de dados: ver a seção 3.4.
+**Implementado x evolução futura.** Está implementado e executado na nuvem tudo o que as seções 3.1 a 3.5 descrevem. Ficam para uma próxima etapa, **não implementados**: orquestração com agendamento e retentativa (hoje cada etapa é um comando executado em sequência), infraestrutura como código (datasets e tópico criados pelos comandos da seção 4), particionamento da Bronze por data de ingestão e gravação do streaming pela Storage Write API.
 
-<!--Estas seções serão preenchidas pelas frentes responsáveis, somente com o que existir de fato no repositório.-->
+## 6. Decisões e trade-offs
 
-## 7. Equipe
+- **Nuvem única: Google Cloud.** Os dados oficiais já estão no BigQuery, então não há transferência entre nuvens nem duas contas de faturamento ou dois modelos de acesso para governar.
+- **Data warehouse (BigQuery) em vez de data lake com arquivos.** Todas as camadas são tabelas do BigQuery: as transformações são SQL, os tipos ficam garantidos pelo esquema e não é preciso administrar arquivos e catálogo. O custo é ficar preso ao modelo de cobrança por bytes lidos (seção 3.2). A única saída em arquivo é a cópia da Gold em Parquet (`gold/export/`), guardada para a Fase 3.
+- **Batch para os dados oficiais, streaming para eventos.** A fonte oficial muda uma vez por ano: uma carga completa sob demanda é suficiente e simples de conferir (contagem origem = baixada = acrescentada). O streaming existe para eventos que chegam aos poucos; a comparação de latência, frequência e garantias está na seção 3.5.
+- **Forma de acesso à fonte: leitura direta do BigQuery público, sem baixar arquivos manualmente.** O script lê cada tabela pela API de leitura de tabelas (`list_rows`), sem consulta SQL, então a leitura da fonte não gera bytes de consulta cobrados. Os dados passam pela memória de quem roda o script (uma carga completa tem cerca de 0,5 GB, quase todo em `alunos`) e são gravados por load job, que é gratuito. Quando a Base dos Dados atualizar, uma nova execução acrescenta uma nova cópia completa e a Silver passa a usar a mais recente (seção 3.1).
+- **Custo x desempenho.**
+  - `silver_tc.alunos` é particionada por ano e clusterizada por UF e município: consultas que filtram ano ou município leem menos.
+  - A Bronze **não** é particionada: a Silver lê a Bronze inteira a cada execução, e a leitura cresce a cada nova carga (seção 3.2). Aceitável com 2 cargas; com recargas frequentes, particionar por data de ingestão seria o primeiro ajuste.
+  - Gravação por load job em vez de inserção por streaming do BigQuery: gratuita e disponível no sandbox, ao custo de alguns segundos de latência por micro-lote (seção 3.5).
+- **Qualidade que bloqueia.** Regras bloqueantes interrompem a Silver e impedem a Gold (seção 3.4). Custa cerca de 1 GB lido por execução nas regras, e evita publicar indicador errado.
+
+## 7. Monitoramento e FinOps
+
+**Qualidade de dados:** ver a seção 3.4 (`ops_tc.dq_results`, falha demonstrada).
+
+**Orçamento com alerta (Cloud Billing).** Orçamento `TC Fase 02`: mensal, só para o projeto Tech Challenge, todos os serviços, R$ 50,00, com alerta por e-mail aos administradores de faturamento em 25%, 50%, 90% e 100% do gasto real. Os créditos promocionais do free trial **não** são descontados, para o alerta acompanhar o consumo real. Prints em [`docs/evidencias/finops/`](docs/evidencias/finops/).
+
+**Custo medido:** seção 3.2 (≈ 2,3 GB lidos por execução completa de Silver e Gold).
+
+*Métricas de execução, alerta de falha e tabela de custo projetado: em construção pela frente 4.*
+
+## 8. Aplicação em IA
+
+A Gold foi desenhada para ser reaproveitada na Fase 3 e está guardada em Parquet em [`gold/export/`](gold/export/).
+
+- **Predição de alfabetização.** `gold_tc.evolucao_municipio` e `gold_tc.municipio_meta` dão, por município e rede, a taxa de 2023 e de 2024. Um modelo pode tentar prever a taxa (ou se o município atinge a meta) a partir de atributos do município. Com só dois anos de série, qualquer projeção até 2030 é um cenário, não uma previsão.
+- **Desigualdade educacional.** A mesma base permite comparar redes, UFs e municípios contra a meta pactuada e localizar onde a distância é maior.
+- **Políticas públicas baseadas em dados.** O status `atingiu` / `nao_atingiu` / `sem_meta` separa quem falhou de quem simplesmente não tem meta cadastrada, o que evita direcionar ação para o grupo errado.
+
+**Cuidado com vazamento de alvo.** `status_meta` e `distancia_meta` são calculadas a partir de `taxa_alfabetizacao`. Se a taxa (ou o status) for o alvo, essas colunas não podem entrar como features: o modelo acertaria tudo sem aprender nada. O mesmo vale para `variacao_pp` e `tendencia` em `evolucao_municipio` quando o alvo é a taxa de 2024, e para `media_portugues` do mesmo ano, que vem da mesma prova que define a taxa. A tabela `indicador_por_origem` mistura dado oficial e simulado e só pode ser usada filtrando `origem = 'oficial'`.
+
+## 9. Limitações conhecidas
+
+- **Dado simulado no streaming:** 7 mensagens de 1 município, para demonstrar o fluxo; não serve para análise (seção 3.5).
+- **Lacunas da fonte:** `uf` não traz DF nem RR; `municipio` não traz RR e tem 5.550 municípios em vez de 5.570; as proporções por nível não existem em 2023; o número nacional de 2023 da tabela de meta (55,9) diverge do recalculado a partir dos microdados (57,46), sem causa confirmada (seção 3.3).
+- **Bronze sem partição:** a leitura da Silver cresce a cada nova carga (seção 6).
+- **Execução manual:** sem orquestrador; as etapas são comandos executados em sequência (seção 4).
+- **Ambiente:** o projeto rodou no sandbox do BigQuery até 28/10/2026, quando o faturamento foi ativado. Os datasets foram criados com a expiração padrão do sandbox (60 dias), que continua valendo até ser removida; por isso a Gold também foi guardada em Parquet.
+- **Revisão de código:** os pull requests foram juntados sem revisão de outra frente.
+
+## 10. Equipe
 
 | Frente | Responsável |
 |---|---|
@@ -356,6 +426,6 @@ Evidências, jobs e contagens: [`docs/evidencias/streaming/`](docs/evidencias/st
 | 3 · Silver/Gold + Qualidade | Ruan |
 | 4 · Observabilidade + FinOps + Docs | Edgard |
 
-## 8. Vídeo executivo
+## 11. Vídeo executivo
 
 *Link a ser incluído.*
